@@ -125,16 +125,20 @@ class MatchOr(object):
 
 
 
-class MatchObject(MatchBase):
+class MatchInstance(MatchBase):
 
-    def __init__(self, **kwargs):
+    def __init__(self, klass=None, **kwargs):
+        self.klass = klass
         self.kwargs = kwargs
 
     def __eq__(self, other):
+        if self.klass and not isinstance(other, self.klass):
+            return False
         return all(hasattr(other, k) and v == getattr(other, k) for k,v in self.kwargs.items())
 
     def __ne__(self, other):
         return not self.__eq__(other)
+
 
 
 class MatchDict(MatchBase):

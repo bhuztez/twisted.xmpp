@@ -2,8 +2,8 @@ from twisted.internet import defer, protocol, ssl
 from twisted.words.xish import domish
 
 from twisted.xmpp.namespaces import *
-from twisted.xmpp.protocols import BaseProtocol, ProtocolReset
-from twisted.xmpp.utils import PatternDispatcher, MatchObject, NoMatchingClause
+from twisted.xmpp.protocols import BaseProtocol, ProtocolReset, Stanza
+from twisted.xmpp.utils import PatternDispatcher, MatchInstance, NoMatchingClause
 
 
 from base64 import b64decode, b64encode
@@ -91,7 +91,9 @@ class DigestMD5(ClientMechanism):
 
 
 
+	
 MECHANISMS = [DigestMD5, Plain]
+
 
 
 
@@ -104,7 +106,7 @@ class ClientProtocol(BaseProtocol):
 
 
     def onConnect(self):
-        e = domish.Element(
+        e = Stanza(
             (NS_STREAMS, 'stream'),
             NS_JABBER_CLIENT,
             { 'to': self.factory.domain,
@@ -118,28 +120,24 @@ class ClientProtocol(BaseProtocol):
     def onDocumentStart(self, root):
         self.streamId = root['id']
 
-        elem = yield self.waitElement(
-            MatchObject(uri=NS_STREAMS, name='features'))
+        elem = yield self.waitStanzaOrEvent(
+            MatchInstance(Stanza, uri=NS_STREAMS, name='features'))
 
         for feature in elem.children:
             try:
                 yield self.handleStreamFeature(feature)
             except NoMatchingClause:
                 pass
-            # except ProtocolReset:
-            #    break
-        print 'connection ready'
-
 
 
     handleStreamFeature = PatternDispatcher('handleStreamFeature')
 
 
     @handleStreamFeature.match
-    def starttls(self, elem=MatchObject(uri=NS_XMPP_TLS, name='starttls')):
+    def starttls(self, elem=MatchInstance(Stanza, uri=NS_XMPP_TLS, name='starttls')):
         uri = NS_XMPP_TLS
-        self.send(domish.Element((uri, 'starttls')))
-        elem = yield self.waitElement(MatchObject(uri=uri))
+        self.send(Stanza((uri, 'starttls')))
+        elem = yield self.waitStanzaOrEvent(MatchInstance(Stanza, uri=uri))
         if elem.name != 'proceed':
             raise Exception
 
@@ -154,15 +152,16 @@ class ClientProtocol(BaseProtocol):
 
 
     @handleStreamFeature.match
-    def saslauth(self, elem=MatchObject(uri=NS_XMPP_SASL, name='mechanisms')):
+    def saslauth(self, elem=MatchInstance(Stanza, uri=NS_XMPP_SASL, name='mechanisms')):
+        print [ mech.toXml() for mech in elem.children ]
         mech = self.select_mech([ mech.children[0] for mech in elem.children ])
         yield mech()
         self.reset()
 
 
     @handleStreamFeature.match
-    def bind(self, elem=MatchObject(uri=NS_XMPP_BIND, name='bind')):
-        e = domish.Element((NS_XMPP_BIND, 'bind'))
+    def bind(self, elem=MatchInstance(Stanza, uri=NS_XMPP_BIND, name='bind')):
+        e = Stanza((NS_XMPP_BIND, 'bind'))
         e.addElement('resource', content=self.factory.resource)
         elem = yield self.sendIq("set", e)
         elem = elem.firstChildElement()
@@ -171,17 +170,16 @@ class ClientProtocol(BaseProtocol):
 
 
     @handleStreamFeature.match
-    def session(self, elem=MatchObject(uri=NS_XMPP_SESSION, name='session')):
-        e = domish.Element((NS_XMPP_SESSION, 'session'))
+    def session(self, elem=MatchInstance(Stanza, uri=NS_XMPP_SESSION, name='session')):
+        e = Stanza((NS_XMPP_SESSION, 'session'))
         elem = yield self.sendIq("set", e)
-
 
 
     handleStreamFeature = defer.inlineCallbacks(handleStreamFeature)
 
 
     def sendSaslAuth(self, mechanism, content=''):
-        e = domish.Element((NS_XMPP_SASL, 'auth'))
+        e = Stanza((NS_XMPP_SASL, 'auth'))
         e['mechanism'] = mechanism
         e.addContent(b64encode(content))
         self.send(e)
@@ -189,14 +187,14 @@ class ClientProtocol(BaseProtocol):
 
 
     def sendSaslResponse(self, content=''):
-        e = domish.Element((NS_XMPP_SASL, 'response'))
+        e = Stanza((NS_XMPP_SASL, 'response'))
         e.addContent(b64encode(content))
         self.send(e)
 
 
     @defer.inlineCallbacks
     def waitSasl(self):
-        elem = yield self.waitElement(MatchObject(uri=NS_XMPP_SASL))
+        elem = yield self.waitStanzaOrEvent(MatchInstance(Stanza, uri=NS_XMPP_SASL))
 
         if len(elem.children):
             if isinstance(elem.children[0], str):

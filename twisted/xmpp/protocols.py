@@ -2,7 +2,10 @@ from twisted.internet import protocol, defer
 from twisted.words.xish import domish
 
 from twisted.xmpp.namespaces import *
-from twisted.xmpp.utils import PatternDispatcher, MatchString, MatchObject, MatchDict
+from twisted.xmpp.utils import PatternDispatcher, MatchString, MatchInstance, MatchDict
+
+
+Stanza = domish.Element
 
 
 class ProtocolReset(Exception):
@@ -21,7 +24,7 @@ class BaseProtocol(protocol.Protocol):
         self.stream = domish.elementStream()
 
         self.stream.DocumentStartEvent = self.onDocumentStart
-        self.stream.ElementEvent = self.onElement
+        self.stream.ElementEvent = self.onStanzaOrEvent
         self.stream.DocumentEndEvent = self.onDocumentEnd
 
         self.onConnect()
@@ -29,7 +32,13 @@ class BaseProtocol(protocol.Protocol):
 
 
     def dataReceived(self, data):
-        self.stream.parse(data)
+        try:
+            self.stream.parse(data)
+        except domish.ParserError:
+            e = Stanza((NS_STREAMS, 'error'))
+            e.addElement('bad-format', NS_XMPP_STREAMS)
+            self.send(e)
+            self.closeStream()
 
 
     def send(self, element, close=True, defaultUri=None):
@@ -55,29 +64,28 @@ class BaseProtocol(protocol.Protocol):
         raise NotImplementedError
 
 
-    def onElement(self, elem):
+    def onStanzaOrEvent(self, stanza_or_event):
         for matcher, listener in self.listeners:
-            if matcher == elem:
-                listener(elem)
-                break
+            if matcher == stanza_or_event:
+                listener(stanza_or_event)
 
         
 
-    def addElementListener(self, matcher, listener):
+    def addListener(self, matcher, listener):
         self.listeners.append((matcher, listener))
 
 
-    def removeElementListener(self, matcher, listener):
+    def removeListener(self, matcher, listener):
         self.listeners.remove((matcher, listener))
 
 
-    def waitElement(self, matcher):
+    def waitStanzaOrEvent(self, matcher):
         d = defer.Deferred()
-        def listener(elem):
-            self.removeElementListener(matcher, listener)
-            d.callback(elem)
+        def listener(stanza_or_event):
+            self.removeListener(matcher, listener)
+            d.callback(stanza_or_event)
 
-        self.addElementListener(matcher, listener)
+        self.addListener(matcher, listener)
         return d
 
 
@@ -85,12 +93,12 @@ class BaseProtocol(protocol.Protocol):
 
 
     @handleIq.match
-    def handleResultIq(self, result=MatchObject(attributes=MatchDict(type='result'))):
+    def handleResultIq(self, result=MatchInstance(Stanza, attributes=MatchDict(type='result'))):
         return result.firstChildElement()
 
 
     @handleIq.match
-    def handleErrorIq(self, result=MatchObject(attributes=MatchDict(type='error'))):
+    def handleErrorIq(self, result=MatchInstance(Stanza, attributes=MatchDict(type='error'))):
         raise result.firstChildElement()
 
 
@@ -98,14 +106,14 @@ class BaseProtocol(protocol.Protocol):
         self.iq_count += 1
         iq = str(self.iq_count)
 
-        e = domish.Element((NS_JABBER_CLIENT, 'iq'))
+        e = Stanza((NS_JABBER_CLIENT, 'iq'))
         e['type'] = type
         e['id'] = iq
         e.addChild(element)
         self.send(e)
 
-        d = self.waitElement(
-            MatchObject(
+        d = self.waitStanzaOrEvent(
+            MatchInstance(Stanza,
                 name = 'iq',
                 attributes = MatchDict(
                     type = MatchString('result')|MatchString('error'),
